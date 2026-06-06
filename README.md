@@ -4,12 +4,33 @@ A proof-of-concept idempotent payment gateway built to solve KofiMarket's $2.7M/
 
 ## Quick Start
 
+**1. Clone and install**
 ```bash
+git clone https://github.com/PiyushDhirwani/yuno-fintech-product
+cd yuno-fintech-product
 npm install
+```
+
+**2. Set environment variables**
+
+Create a `.env` file in the project root (it is gitignored):
+```
+UPSTASH_REDIS_REST_URL=<your-upstash-rest-url>
+UPSTASH_REDIS_REST_TOKEN=<your-upstash-rest-token>
+```
+
+Get free credentials at [upstash.com](https://upstash.com) → Create Database → REST API tab.
+
+**3. Start the server**
+```bash
 npm run start:dev
 ```
 
 Then open **http://localhost:3000** for the live dashboard.
+
+### Live deployment
+
+The app is deployed at **https://yuno-fintech-product.vercel.app** — the same codebase, running on Vercel serverless with the same Upstash Redis database.
 
 ## API Reference
 
@@ -199,9 +220,11 @@ The simulated processor times out ~10% of the time (configurable in `processor.s
 
 ### Storage
 
-Payments are stored in an in-memory `Map` (fast, zero-dependency) with **file-based persistence** to `data/payments.json`. The file is loaded at startup and written synchronously on every mutation.
+Payments are stored in **[Upstash Redis](https://upstash.com)** (serverless Redis over REST). Each payment is a JSON value at `payment:{idempotencyKey}`; a Redis Set at `payments:index` tracks all keys for listing. Duplicate-attempt arrays live at `duplicates:{key}`.
 
-On Vercel (serverless), `/tmp/payments.json` is used instead — data persists within a warm instance but resets on cold start. For production, replace `StoreService` with a Redis or Postgres adapter (the interface is minimal: `get`, `set`, `update`, `recordDuplicate`).
+Using Redis means data is shared across every serverless Lambda instance on Vercel and survives cold starts — something that was impossible with the previous per-instance file approach.
+
+For local development, the same Upstash database is used (credentials in `.env`). To swap storage backends, only `StoreService` needs changing — the interface is eight methods: `getPayment`, `setPayment`, `updatePayment`, `recordDuplicate`, `getAllPayments`, `clear`, `getStats`.
 
 ### Project Structure
 
@@ -232,7 +255,7 @@ npm install -g vercel
 vercel
 ```
 
-The included `vercel.json` routes all traffic to the compiled NestJS server. Environment variables (`PORT`) are handled automatically.
+Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in the Vercel project's Environment Variables dashboard before deploying. The included `vercel.json` runs `nest build`, bundles the output, and routes all `/api/*` traffic to the compiled NestJS handler. The `public/` folder is served as static CDN assets.
 
 ---
 

@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Redis } from '@upstash/redis';
 import { DuplicateAttempt, PaymentRecord } from '../types/payment.types';
 
+// Redis key layout:
+//   payment:{idempotencyKey}  →  JSON PaymentRecord
+//   duplicates:{idempotencyKey}  →  JSON DuplicateAttempt[]
+//   payments:index  →  Redis Set of all idempotency keys (for list queries)
+//   duplicates:index  →  Redis Set of keys that have at least one duplicate
 const PAYMENTS_IDX = 'payments:index';
 const DUPES_IDX = 'duplicates:index';
 
