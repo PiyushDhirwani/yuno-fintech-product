@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KofiMarket Payment Gateway</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .badge-approved  { @apply bg-green-100 text-green-800; }
+    .badge-declined  { @apply bg-red-100 text-red-800; }
+    .badge-unknown   { @apply bg-yellow-100 text-yellow-800; }
+    .badge-processing{ @apply bg-blue-100 text-blue-800; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+            <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+          </div>
+          <div>
+            <h1 class="text-lg font-bold text-gray-900">KofiMarket Payment Gateway</h1>
+            <p class="text-xs text-gray-500">Idempotent Payment Processing PoC</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="refresh-indicator" class="text-xs text-gray-400"></span>
+          <button onclick="loadDashboard()" class="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-md font-medium transition">
+            ↻ Refresh
+          </button>
+          <button onclick="seedData()" class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-md font-medium transition">
+            Seed Test Data
+          </button>
+          <button onclick="clearData()" class="text-xs bg-red-50 hover:bg-red-100 text-red-700 px-3 py-1.5 rounded-md font-medium transition">
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <p class="text-sm text-gray-500 font-medium">Total Requests</p>
+        <p id="stat-total" class="text-3xl font-bold text-gray-900 mt-1">—</p>
+        <p class="text-xs text-gray-400 mt-1">including retries</p>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <p class="text-sm text-gray-500 font-medium">Duplicates Blocked</p>
+        <p id="stat-dupes" class="text-3xl font-bold text-red-600 mt-1">—</p>
+        <p class="text-xs text-gray-400 mt-1">charges prevented</p>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <p class="text-sm text-gray-500 font-medium">Amount Saved</p>
+        <p id="stat-saved" class="text-3xl font-bold text-emerald-600 mt-1">—</p>
+        <p class="text-xs text-gray-400 mt-1">from duplicate blocks</p>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <p class="text-sm text-gray-500 font-medium">Success Rate</p>
+        <p id="stat-rate" class="text-3xl font-bold text-indigo-600 mt-1">—</p>
+        <p class="text-xs text-gray-400 mt-1">of unique payments</p>
+      </div>
+    </div>
+
+    <!-- Status Breakdown + Currency Totals -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-4">Payment Status Breakdown</h2>
+        <div id="status-breakdown" class="space-y-2">
+          <p class="text-sm text-gray-400">Loading…</p>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-4">Volume by Currency</h2>
+        <div id="currency-breakdown" class="space-y-2">
+          <p class="text-sm text-gray-400">Loading…</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submit Payment Test Form -->
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">Test a Payment</h2>
+      <div class="grid grid-cols-2 lg:grid-cols-6 gap-3">
+        <input id="f-orderId"   type="text"   value="order-DEMO-001" placeholder="Order ID"   class="col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        <input id="f-customerId" type="text"  value="cust-0042"      placeholder="Customer ID" class="col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        <input id="f-amount"    type="number" value="5000"            placeholder="Amount"     class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        <select id="f-currency" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          <option>NGN</option><option>GHS</option><option>KES</option><option>XOF</option>
+        </select>
+        <input id="f-idem" type="text" placeholder="Idempotency key (optional)" class="col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        <button onclick="submitPayment()" class="col-span-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">
+          Submit Payment
+        </button>
+        <button onclick="retryLastPayment()" class="col-span-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg transition">
+          Retry Same Request ↩
+        </button>
+      </div>
+      <div id="payment-response" class="mt-4 hidden">
+        <div id="response-badge" class="flex items-center gap-2 mb-2"></div>
+        <pre id="response-json" class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs overflow-x-auto"></pre>
+      </div>
+    </div>
+
+    <!-- Duplicate Prevention Table -->
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">
+        Duplicate Attempts Blocked
+        <span id="dupe-count" class="ml-2 bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">0</span>
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-gray-500 border-b border-gray-100">
+              <th class="pb-2 pr-4 font-medium">Order ID</th>
+              <th class="pb-2 pr-4 font-medium">Amount</th>
+              <th class="pb-2 pr-4 font-medium">Currency</th>
+              <th class="pb-2 pr-4 font-medium">Retries</th>
+              <th class="pb-2 pr-4 font-medium">Saved</th>
+              <th class="pb-2 font-medium">Final Status</th>
+            </tr>
+          </thead>
+          <tbody id="dupes-table" class="divide-y divide-gray-50">
+            <tr><td colspan="6" class="py-4 text-center text-gray-400 text-xs">No duplicates yet. Seed data or retry a payment.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Recent Payments Table -->
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">
+        All Payments
+        <span id="payments-count" class="ml-2 bg-gray-100 text-gray-700 text-xs font-bold px-2 py-0.5 rounded-full">0</span>
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-gray-500 border-b border-gray-100">
+              <th class="pb-2 pr-4 font-medium">Idempotency Key</th>
+              <th class="pb-2 pr-4 font-medium">Order</th>
+              <th class="pb-2 pr-4 font-medium">Customer</th>
+              <th class="pb-2 pr-4 font-medium">Amount</th>
+              <th class="pb-2 pr-4 font-medium">Status</th>
+              <th class="pb-2 pr-4 font-medium">Retries</th>
+              <th class="pb-2 font-medium">Created</th>
+            </tr>
+          </thead>
+          <tbody id="payments-table" class="divide-y divide-gray-50">
+            <tr><td colspan="7" class="py-4 text-center text-gray-400 text-xs">No payments yet. Use the form above or seed test data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Toast -->
+  <div id="toast" class="fixed bottom-4 right-4 hidden">
+    <div id="toast-inner" class="px-4 py-3 rounded-lg text-sm font-medium shadow-lg text-white"></div>
+  </div>
+
+<script>
+const API = '/api';
+let lastPayload = null;
+
+function statusBadge(status) {
+  const colors = {
+    approved:   'bg-green-100 text-green-800',
+    declined:   'bg-red-100 text-red-800',
+    unknown:    'bg-yellow-100 text-yellow-800',
+    processing: 'bg-blue-100 text-blue-800',
+    pending:    'bg-gray-100 text-gray-700',
+    timeout:    'bg-orange-100 text-orange-800',
+  };
+  const cls = colors[status] ?? 'bg-gray-100 text-gray-700';
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${cls}">${status}</span>`;
+}
+
+function fmt(amount, currency) {
+  return `${currency} ${Number(amount).toLocaleString()}`;
+}
+
+function timeAgo(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  const inner = document.getElementById('toast-inner');
+  inner.textContent = msg;
+  inner.className = `px-4 py-3 rounded-lg text-sm font-medium shadow-lg text-white ${isError ? 'bg-red-600' : 'bg-gray-900'}`;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 3000);
+}
+
+async function loadDashboard() {
+  document.getElementById('refresh-indicator').textContent = 'Refreshing…';
+  try {
+    const [statsRes, paymentsRes] = await Promise.all([
+      fetch(`${API}/dashboard`),
+      fetch(`${API}/payments`),
+    ]);
+    const stats = await statsRes.json();
+    const payments = await paymentsRes.json();
+    renderStats(stats);
+    renderDuplicates(stats.paymentsWithDuplicates ?? []);
+    renderPayments(payments);
+    document.getElementById('refresh-indicator').textContent =
+      `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById('refresh-indicator').textContent = 'Error loading data';
+    showToast('Could not load dashboard data', true);
+  }
+}
+
+function renderStats(stats) {
+  document.getElementById('stat-total').textContent =
+    (stats.totalRequests ?? 0).toLocaleString();
+  document.getElementById('stat-dupes').textContent =
+    (stats.duplicatesBlocked ?? 0).toLocaleString();
+  document.getElementById('stat-saved').textContent =
+    (stats.amountSavedFromDuplicates ?? 0).toLocaleString();
+  document.getElementById('stat-rate').textContent =
+    `${stats.successRate ?? 0}%`;
+
+  // Status breakdown bars
+  const byStatus = stats.byStatus ?? {};
+  const total = stats.uniquePayments || 1;
+  const statusEl = document.getElementById('status-breakdown');
+  const statusOrder = ['approved', 'declined', 'unknown', 'processing'];
+  const statusColors = {
+    approved: 'bg-green-500', declined: 'bg-red-400',
+    unknown: 'bg-yellow-400', processing: 'bg-blue-400',
+  };
+  statusEl.innerHTML = statusOrder
+    .filter(s => byStatus[s])
+    .map(s => {
+      const count = byStatus[s];
+      const pct = Math.round((count / total) * 100);
+      return `
+        <div class="flex items-center gap-2">
+          <span class="w-20 text-xs text-gray-600 capitalize">${s}</span>
+          <div class="flex-1 bg-gray-100 rounded-full h-2">
+            <div class="${statusColors[s] ?? 'bg-gray-400'} h-2 rounded-full" style="width:${pct}%"></div>
+          </div>
+          <span class="text-xs text-gray-500 w-16 text-right">${count} (${pct}%)</span>
+        </div>`;
+    }).join('') || '<p class="text-sm text-gray-400">No data</p>';
+
+  // Currency breakdown
+  const byCurrency = stats.byCurrency ?? {};
+  const currEl = document.getElementById('currency-breakdown');
+  currEl.innerHTML = Object.entries(byCurrency)
+    .sort(([, a], [, b]) => b.amount - a.amount)
+    .map(([currency, data]) => `
+      <div class="flex items-center justify-between py-1 border-b border-gray-50 last:border-0">
+        <span class="text-sm font-medium text-gray-700">${currency}</span>
+        <div class="text-right">
+          <p class="text-sm font-semibold text-gray-900">${data.amount.toLocaleString()}</p>
+          <p class="text-xs text-gray-400">${data.count} transactions</p>
+        </div>
+      </div>`).join('') || '<p class="text-sm text-gray-400">No data</p>';
+}
+
+function renderDuplicates(dupes) {
+  document.getElementById('dupe-count').textContent = dupes.length;
+  const tbody = document.getElementById('dupes-table');
+  if (!dupes.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-gray-400 text-xs">No duplicates yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = dupes.map(d => `
+    <tr class="hover:bg-gray-50">
+      <td class="py-2 pr-4 font-mono text-xs text-gray-700">${d.orderId}</td>
+      <td class="py-2 pr-4 text-gray-700">${d.amount.toLocaleString()}</td>
+      <td class="py-2 pr-4 text-gray-500">${d.currency}</td>
+      <td class="py-2 pr-4">
+        <span class="bg-orange-100 text-orange-800 text-xs font-bold px-2 py-0.5 rounded-full">×${d.retryCount}</span>
+      </td>
+      <td class="py-2 pr-4 text-emerald-700 font-medium text-xs">${d.amountSaved.toLocaleString()} ${d.currency}</td>
+      <td class="py-2">${statusBadge(d.finalStatus)}</td>
+    </tr>`).join('');
+}
+
+function renderPayments(payments) {
+  document.getElementById('payments-count').textContent = payments.length;
+  const tbody = document.getElementById('payments-table');
+  if (!payments.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="py-4 text-center text-gray-400 text-xs">No payments yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = payments.slice(0, 50).map(p => `
+    <tr class="hover:bg-gray-50">
+      <td class="py-2 pr-4 font-mono text-xs text-gray-500 max-w-32 truncate" title="${p.idempotencyKey}">
+        ${p.idempotencyKey.substring(0, 12)}…
+        ${p.autoGeneratedKey ? '<span title="Auto-generated key" class="text-indigo-400 text-xs">⚡</span>' : ''}
+      </td>
+      <td class="py-2 pr-4 text-xs text-gray-700">${p.orderId}</td>
+      <td class="py-2 pr-4 text-xs text-gray-500">${p.customerId}</td>
+      <td class="py-2 pr-4 text-xs font-medium text-gray-900">${fmt(p.amount, p.currency)}</td>
+      <td class="py-2 pr-4">${statusBadge(p.status)}</td>
+      <td class="py-2 pr-4 text-xs text-gray-400">${p.retryCount > 0 ? `<span class="text-orange-600 font-medium">${p.retryCount} retries</span>` : '—'}</td>
+      <td class="py-2 text-xs text-gray-400">${timeAgo(p.createdAt)}</td>
+    </tr>`).join('');
+}
+
+async function submitPayment() {
+  const payload = {
+    orderId:    document.getElementById('f-orderId').value.trim(),
+    customerId: document.getElementById('f-customerId').value.trim(),
+    amount:     Number(document.getElementById('f-amount').value),
+    currency:   document.getElementById('f-currency').value,
+  };
+  const idemKey = document.getElementById('f-idem').value.trim();
+  if (idemKey) payload.idempotencyKey = idemKey;
+
+  lastPayload = payload;
+  await callPayments(payload);
+}
+
+async function retryLastPayment() {
+  if (!lastPayload) { showToast('Submit a payment first', true); return; }
+  await callPayments(lastPayload);
+}
+
+async function callPayments(payload) {
+  const el = document.getElementById('payment-response');
+  const badge = document.getElementById('response-badge');
+  const json  = document.getElementById('response-json');
+  el.classList.remove('hidden');
+  badge.innerHTML = '<div class="spin w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full"></div><span class="text-xs text-gray-500">Processing…</span>';
+  json.textContent = '';
+
+  try {
+    const res = await fetch(`${API}/payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    const isIdempotent = data.idempotent;
+    const httpCode = res.status;
+    badge.innerHTML = `
+      ${statusBadge(data.status)}
+      <span class="text-xs text-gray-500">HTTP ${httpCode}</span>
+      ${isIdempotent ? '<span class="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full font-medium">🛡 Duplicate blocked</span>' : ''}`;
+    json.textContent = JSON.stringify(data, null, 2);
+    loadDashboard();
+  } catch (e) {
+    badge.innerHTML = '<span class="text-red-500 text-xs">Request failed</span>';
+    json.textContent = e.message;
+  }
+}
+
+async function seedData() {
+  showToast('Seeding test data…');
+  try {
+    const res = await fetch(`${API}/seed`, { method: 'POST' });
+    const data = await res.json();
+    showToast(`✓ ${data.paymentsCreated} payments, ${data.duplicatesCreated} duplicate attempts`);
+    loadDashboard();
+  } catch (e) {
+    showToast('Seed failed', true);
+  }
+}
+
+async function clearData() {
+  if (!confirm('Clear all payment records?')) return;
+  try {
+    await fetch(`${API}/dashboard/clear`, { method: 'DELETE' });
+    showToast('Cleared');
+    loadDashboard();
+  } catch (e) {
+    showToast('Clear failed', true);
+  }
+}
+
+// Initial load + auto-refresh every 10s
+loadDashboard();
+setInterval(loadDashboard, 10_000);
+</script>
+</body>
+</html>
