@@ -11,7 +11,7 @@ export class DashboardController {
    * status breakdown, per-currency totals, and top duplicate offenders.
    */
   @Get()
-  getStats() {
+  async getStats() {
     return this.store.getStats();
   }
 
@@ -21,8 +21,8 @@ export class DashboardController {
    * Useful for resetting the demo between runs.
    */
   @Delete('clear')
-  clearStore() {
-    this.store.clear();
+  async clearStore() {
+    await this.store.clear();
     return { message: 'All payment records cleared successfully.' };
   }
 }

@@ -43,7 +43,7 @@ export class SeedService {
     duplicatesCreated: number;
     summary: string[];
   }> {
-    this.store.clear();
+    await this.store.clear();
 
     const currencies: string[] = ['GHS', 'NGN', 'KES', 'XOF'];
     const amountRanges: Record<string, [number, number]> = {
@@ -110,7 +110,6 @@ export class SeedService {
         processorMessage,
       };
       records.push(record);
-      this.store.setPayment(record);
     }
     summary.push(`50 standard payments (70/20/10 split: approved/declined/unknown)`);
 
@@ -168,8 +167,11 @@ export class SeedService {
         processorMessage: edge.processorMessage,
       };
       records.push(record);
-      this.store.setPayment(record);
     }
+
+    // Write all 53 payment records in parallel
+    await Promise.all(records.map((r) => this.store.setPayment(r)));
+
     summary.push(
       `3 edge cases: large amount (9,999,999 NGN), minimum amount (1 GHS), pending-timeout (12,500 KES)`,
     );
@@ -190,10 +192,10 @@ export class SeedService {
           ).toISOString(),
           returnedStatus: target.status,
         };
-        this.store.recordDuplicate(target.idempotencyKey, attempt);
+        await this.store.recordDuplicate(target.idempotencyKey, attempt);
         duplicatesCreated++;
       }
-      this.store.updatePayment(target.idempotencyKey, { retryCount: retries });
+      await this.store.updatePayment(target.idempotencyKey, { retryCount: retries });
     }
     summary.push(
       `${duplicatesCreated} duplicate attempts across ${duplicateTargets.length} orders (1-4 retries each)`,

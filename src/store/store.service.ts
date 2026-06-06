@@ -1,148 +1,139 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as fs from 'fs';
-import * as path from 'path';
-import { PaymentRecord, DuplicateAttempt, StoreData } from '../types/payment.types';
+import { Redis } from '@upstash/redis';
+import { DuplicateAttempt, PaymentRecord } from '../types/payment.types';
+
+const PAYMENTS_IDX = 'payments:index';
+const DUPES_IDX = 'duplicates:index';
 
 @Injectable()
 export class StoreService {
   private readonly logger = new Logger(StoreService.name);
-
-  // Module-level maps serve as primary in-memory store
-  private readonly payments = new Map<string, PaymentRecord>();
-  private readonly duplicateAttempts = new Map<string, DuplicateAttempt[]>();
-
-  private readonly dataFile: string;
+  private readonly redis: Redis;
 
   constructor() {
-    // Use /tmp on Vercel (serverless), ./data locally
-    const dataDir =
-      process.env.NODE_ENV === 'production'
-        ? '/tmp'
-        : path.join(process.cwd(), 'data');
-    this.dataFile = path.join(dataDir, 'payments.json');
-    this.loadFromFile();
+    this.redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    });
+    this.logger.log('Store initialised with Upstash Redis');
   }
 
-  private loadFromFile(): void {
-    try {
-      const dir = path.dirname(this.dataFile);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      if (fs.existsSync(this.dataFile)) {
-        const raw = fs.readFileSync(this.dataFile, 'utf-8');
-        const data: StoreData = JSON.parse(raw);
-
-        Object.values(data.payments || {}).forEach((p) =>
-          this.payments.set(p.idempotencyKey, p),
-        );
-        Object.entries(data.duplicateAttempts || {}).forEach(([k, v]) =>
-          this.duplicateAttempts.set(k, v),
-        );
-
-        this.logger.log(
-          `Loaded ${this.payments.size} payments from ${this.dataFile}`,
-        );
-      }
-    } catch (e) {
-      this.logger.warn(`Could not load store from file: ${(e as Error).message}`);
-    }
+  async getPayment(key: string): Promise<PaymentRecord | undefined> {
+    const record = await this.redis.get<PaymentRecord>(`payment:${key}`);
+    return record ?? undefined;
   }
 
-  private persist(): void {
-    try {
-      const data: StoreData = {
-        payments: Object.fromEntries(this.payments),
-        duplicateAttempts: Object.fromEntries(this.duplicateAttempts),
-      };
-      fs.writeFileSync(this.dataFile, JSON.stringify(data, null, 2));
-    } catch (e) {
-      this.logger.warn(`Could not persist store: ${(e as Error).message}`);
-    }
+  async setPayment(record: PaymentRecord): Promise<void> {
+    await Promise.all([
+      this.redis.set(`payment:${record.idempotencyKey}`, record),
+      this.redis.sadd(PAYMENTS_IDX, record.idempotencyKey),
+    ]);
   }
 
-  getPayment(key: string): PaymentRecord | undefined {
-    return this.payments.get(key);
-  }
-
-  setPayment(record: PaymentRecord): void {
-    this.payments.set(record.idempotencyKey, record);
-    this.persist();
-  }
-
-  updatePayment(
+  async updatePayment(
     key: string,
     updates: Partial<PaymentRecord>,
-  ): PaymentRecord | undefined {
-    const existing = this.payments.get(key);
+  ): Promise<PaymentRecord | undefined> {
+    const existing = await this.getPayment(key);
     if (!existing) return undefined;
     const updated: PaymentRecord = {
       ...existing,
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-    this.payments.set(key, updated);
-    this.persist();
+    await this.setPayment(updated);
     return updated;
   }
 
-  recordDuplicate(key: string, attempt: DuplicateAttempt): void {
-    const existing = this.duplicateAttempts.get(key) ?? [];
-    this.duplicateAttempts.set(key, [...existing, attempt]);
-    this.persist();
+  async recordDuplicate(key: string, attempt: DuplicateAttempt): Promise<void> {
+    const existing: DuplicateAttempt[] =
+      (await this.redis.get<DuplicateAttempt[]>(`duplicates:${key}`)) ?? [];
+    await Promise.all([
+      this.redis.set(`duplicates:${key}`, [...existing, attempt]),
+      this.redis.sadd(DUPES_IDX, key),
+    ]);
   }
 
-  getAllPayments(): PaymentRecord[] {
-    return Array.from(this.payments.values()).sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  async getAllPayments(): Promise<PaymentRecord[]> {
+    const keys = await this.redis.smembers(PAYMENTS_IDX);
+    if (!keys.length) return [];
+    const records = await Promise.all(
+      keys.map((k) => this.redis.get<PaymentRecord>(`payment:${k}`)),
     );
+    return records
+      .filter((r): r is PaymentRecord => r !== null)
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
   }
 
-  getDuplicateAttempts(): Record<string, DuplicateAttempt[]> {
-    return Object.fromEntries(this.duplicateAttempts);
+  private async getDuplicateAttempts(): Promise<
+    Record<string, DuplicateAttempt[]>
+  > {
+    const keys = await this.redis.smembers(DUPES_IDX);
+    if (!keys.length) return {};
+    const entries = await Promise.all(
+      keys.map(async (k) => {
+        const dupes =
+          (await this.redis.get<DuplicateAttempt[]>(`duplicates:${k}`)) ?? [];
+        return [k, dupes] as [string, DuplicateAttempt[]];
+      }),
+    );
+    return Object.fromEntries(entries);
   }
 
-  clear(): void {
-    this.payments.clear();
-    this.duplicateAttempts.clear();
-    this.persist();
+  async clear(): Promise<void> {
+    const [paymentKeys, dupeKeys] = await Promise.all([
+      this.redis.smembers(PAYMENTS_IDX),
+      this.redis.smembers(DUPES_IDX),
+    ]);
+    const allKeys: string[] = [
+      PAYMENTS_IDX,
+      DUPES_IDX,
+      ...paymentKeys.map((k) => `payment:${k}`),
+      ...dupeKeys.map((k) => `duplicates:${k}`),
+    ];
+    if (allKeys.length) {
+      await this.redis.del(allKeys[0], ...allKeys.slice(1));
+    }
+    this.logger.log('Store cleared');
   }
 
-  getStats() {
-    const allPayments = Array.from(this.payments.values());
-    const allDuplicates = Array.from(this.duplicateAttempts.entries());
+  async getStats() {
+    const [allPayments, duplicateAttempts] = await Promise.all([
+      this.getAllPayments(),
+      this.getDuplicateAttempts(),
+    ]);
 
     const byStatus: Record<string, number> = {};
     const byCurrency: Record<string, { count: number; amount: number }> = {};
     let approvedTotal = 0;
 
-    allPayments.forEach((p) => {
+    for (const p of allPayments) {
       byStatus[p.status] = (byStatus[p.status] ?? 0) + 1;
-
-      if (!byCurrency[p.currency]) {
+      if (!byCurrency[p.currency])
         byCurrency[p.currency] = { count: 0, amount: 0 };
-      }
       byCurrency[p.currency].count++;
       byCurrency[p.currency].amount += p.amount;
-
       if (p.status === 'approved') approvedTotal += p.amount;
-    });
+    }
 
-    const duplicatesBlocked = allDuplicates.reduce(
+    const allDupes = Object.entries(duplicateAttempts);
+    const duplicatesBlocked = allDupes.reduce(
       (sum, [, v]) => sum + v.length,
       0,
     );
 
+    const paymentsMap = new Map(allPayments.map((p) => [p.idempotencyKey, p]));
     let amountSaved = 0;
-    allDuplicates.forEach(([key, dupes]) => {
-      const original = this.payments.get(key);
-      if (original) amountSaved += original.amount * dupes.length;
-    });
 
-    const paymentsWithDuplicates = allDuplicates
+    const paymentsWithDuplicates = allDupes
       .filter(([, dupes]) => dupes.length > 0)
       .map(([key, dupes]) => {
-        const original = this.payments.get(key);
+        const original = paymentsMap.get(key);
+        const saved = (original?.amount ?? 0) * dupes.length;
+        amountSaved += saved;
         return {
           idempotencyKey: key,
           orderId: original?.orderId ?? 'unknown',
@@ -151,7 +142,7 @@ export class StoreService {
           originalTime: original?.createdAt ?? '',
           retryCount: dupes.length,
           finalStatus: original?.status ?? 'unknown',
-          amountSaved: (original?.amount ?? 0) * dupes.length,
+          amountSaved: saved,
         };
       })
       .sort((a, b) => b.retryCount - a.retryCount);
