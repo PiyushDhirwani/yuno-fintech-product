@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import { ProcessorResult } from '../types/payment.types';
 
 @Injectable()
@@ -49,7 +49,7 @@ export class ProcessorService {
 
     // 70% approved, 20% declined (out of the 90% non-timeout requests)
     if (rand < 0.80) {
-      const transactionId = `txn-${uuidv4().split('-')[0]}-${Date.now()}`;
+      const transactionId = `txn-${randomUUID().split('-')[0]}-${Date.now()}`;
       this.logger.log(`[Processor] APPROVED ${transactionId} — ${amount} ${currency} (order: ${orderId})`);
       return {
         success: true,
@@ -89,7 +89,7 @@ export class ProcessorService {
 
     // 50% eventually approved, 20% declined
     if (rand < 0.80) {
-      const transactionId = `txn-recovered-${uuidv4().split('-')[0]}`;
+      const transactionId = `txn-recovered-${randomUUID().split('-')[0]}`;
       this.logger.log(`[Processor] Resolved APPROVED for order ${orderId}: ${transactionId}`);
       return {
         success: true,

@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { StoreService } from '../store/store.service';
 import { DuplicateAttempt, PaymentRecord, PaymentStatus } from '../types/payment.types';
 
@@ -85,7 +84,7 @@ export class SeedService {
 
       if (r < 0.70) {
         status = 'approved';
-        transactionId = `txn-seed-${uuidv4().split('-')[0]}`;
+        transactionId = `txn-seed-${crypto.randomUUID().split('-')[0]}`;
         processorMessage = 'Payment approved by processor';
       } else if (r < 0.90) {
         status = 'declined';
@@ -123,7 +122,7 @@ export class SeedService {
         amount: 9_999_999,
         currency: 'NGN',
         status: 'approved',
-        transactionId: `txn-edge-large-${uuidv4().split('-')[0]}`,
+        transactionId: `txn-edge-large-${crypto.randomUUID().split('-')[0]}`,
         processorMessage: 'High-value payment approved',
       },
       {
