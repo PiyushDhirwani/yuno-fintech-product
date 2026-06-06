@@ -1,26 +1,26 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { join } from 'path';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const logger = new Logger('Bootstrap');
 
-  // All routes under /api prefix
   app.setGlobalPrefix('api');
-
-  // Validate and transform incoming DTOs automatically
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true,        // strip unknown fields
+      whitelist: true,
       forbidNonWhitelisted: false,
-      transform: true,        // coerce types (e.g., string → number)
+      transform: true,
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-
-  // Allow browser dashboard and Postman to reach the API
   app.enableCors();
+
+  // Serve dashboard UI at / (local dev only — Vercel CDN handles this in production)
+  app.useStaticAssets(join(__dirname, '..', 'public'), { prefix: '/' });
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port);
